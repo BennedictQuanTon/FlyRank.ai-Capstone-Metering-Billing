@@ -1,0 +1,38 @@
+# Manifest for the capstone evaluator.
+name: usage-metering-billing-engine
+stack: python-fastapi + postgres (docker compose) + stripe test mode
+
+run: cp -n .env.example .env; docker compose up --build -d
+seed: docker compose exec -T api python -m scripts.seed
+test: docker compose exec -T api pytest -q
+base_url: http://localhost:8000
+
+# Demo API keys created by the seed step
+tenants:
+  free: demo_free_acme
+  pro: demo_pro_globex
+  checkout: demo_free_initech
+
+endpoints:
+  - name: health
+    method: GET
+    path: /health
+  - name: billable_action
+    method: POST
+    path: /generate
+    headers: { X-API-Key: demo_free_acme, Idempotency-Key: "<unique per request>" }
+    body: { input_tokens: 1200, cached_input_tokens: 200, output_tokens: 2500, reasoning_tokens: 300 }
+  - name: usage
+    method: GET
+    path: /usage
+    headers: { X-API-Key: demo_free_acme }
+  - name: checkout
+    method: POST
+    path: /billing/checkout
+    headers: { X-API-Key: demo_free_initech }
+  - name: stripe_webhook
+    method: POST
+    path: /webhooks/stripe
+    headers: { Stripe-Signature: "<signed by Stripe>" }
+
+probes: python -m scripts.probes --base-url http://localhost:8000
