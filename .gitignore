@@ -1,0 +1,17 @@
+# Secrets: never commit real keys (Stripe sk_test_ / whsec_ included)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.claude/
