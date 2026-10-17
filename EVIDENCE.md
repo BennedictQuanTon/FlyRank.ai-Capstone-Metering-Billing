@@ -9,7 +9,7 @@ docker compose exec -T api pytest -v
 docker compose exec -T api python -m scripts.probes
 ```
 
-Status: ✅ proven · ⏳ waiting for Stripe test keys (code and unit tests are done; the live transcript gets pasted after `stripe listen` runs)
+Status: ✅ proven. Stripe parts ran against a real Stripe **test-mode** account with `stripe listen --forward-to localhost:8000/webhooks/stripe` (Stripe CLI 1.54.0).
 
 ## Test suite (29 tests, real Postgres)
 
@@ -43,7 +43,7 @@ tests/test_webhooks.py::test_subscription_lifecycle_updates_plan PASSED
 tests/test_webhooks.py::test_out_of_order_event_cannot_undo_newer_state PASSED
 tests/test_webhooks.py::test_unrelated_events_are_acknowledged_and_ignored PASSED
 tests/test_webhooks.py::test_failing_event_retries_then_alerts PASSED
-============================== 29 passed in 0.99s ==============================
+============================== 29 passed in 1.10s ==============================
 ```
 
 ---
@@ -106,11 +106,13 @@ Three layers, each proven:
 
 ```text
 -- insert a second event for Probe 1's idempotency key, bypassing the app:
-name             | plan_code | usage_events 
+ERROR:  duplicate key value violates unique constraint "usage_events_tenant_id_idempotency_key_key"
+DETAIL:  Key (tenant_id, idempotency_key)=(08eac36a-c537-4a57-9394-7c17920f4238, probe1-047c26eb) already exists.
+             name             | plan_code | usage_events 
 ------------------------------+-----------+--------------
  Acme (Free)                  | free      |         1000
  Globex (Pro)                 | pro       |            1
- Initech (Free, for checkout) | free      |            0
+ Initech (Free, for checkout) | pro       |            0
 (3 rows)
 ```
 
@@ -254,13 +256,55 @@ What the rules prevent, each pinned by a test:
 
 ## Stripe integration
 
-### ⏳ Subscription checkout works end-to-end in Stripe test mode (Probe 3)
+### ✅ Subscription checkout works end-to-end in Stripe test mode (Probe 3)
 
 Implemented: `POST /billing/checkout` (`app/services/billing.py`) and `scripts/stripe_setup.py`. Unit-proven: `test_checkout_flips_free_to_pro_and_usage_shows_new_limits`, in which a signed `checkout.session.completed` is queued, the worker applies it, the tenant becomes `pro/active`, and `GET /usage` shows limits of 50,000 / 5,000,000.
 
-_Live transcript (Checkout URL → paid with 4242 card → `stripe listen` log → worker log → `GET /usage` showing Pro) goes here._
+Live run for tenant **Initech** (`demo_free_initech`):
 
-### ⏳ Webhooks verify signatures, ignore duplicate events, and update tenant plan/status (Probe 4)
+**1. Before:** `GET /usage`
+```json
+{"plan": "free", "status": "active", "limits": {"api_calls": 1000, "tokens": 100000}}
+```
+
+**2. Start Checkout:** `POST /billing/checkout` → `200`
+```json
+{"checkout_url": "https://checkout.stripe.com/c/pay/cs_test_a1v4eDvT2IcYQgqlmEJDeC4gaHkpNDtHZs8dTRC7y1p5W9cjd8o4eOovgo#…", "session_id": "cs_test_a1v4eDvT2IcYQgqlmEJDeC4gaHkpNDtHZs8dTRC7y1p5W9cjd8o4eOovgo"}
+```
+
+**3. Paid** on the Stripe-hosted page with test card `4242 4242 4242 4242` → redirected to `/billing/success`.
+
+**4. Stripe delivered signed webhooks** (`stripe listen` log):
+```text
+2026-10-17 22:07:47   --> checkout.session.completed [evt_1URZD4IKhLvwumC6hJSGrxdq]
+2026-10-17 22:07:47  <--  [200] POST http://localhost:8000/webhooks/stripe [evt_1URZD4IKhLvwumC6hJSGrxdq]
+2026-10-17 22:07:47   --> customer.subscription.created [evt_1URZD5IKhLvwumC66Au1IS35]
+2026-10-17 22:07:47  <--  [200] POST http://localhost:8000/webhooks/stripe [evt_1URZD5IKhLvwumC66Au1IS35]
+2026-10-17 22:07:47   --> customer.subscription.updated [evt_1URZD5IKhLvwumC6Gp7hqqTA]
+2026-10-17 22:07:47  <--  [200] POST http://localhost:8000/webhooks/stripe [evt_1URZD5IKhLvwumC6Gp7hqqTA]
+2026-10-17 22:08:16   --> checkout.session.completed [evt_1URZD4IKhLvwumC6hJSGrxdq]
+2026-10-17 22:08:16  <--  [200] POST http://localhost:8000/webhooks/stripe [evt_1URZD4IKhLvwumC6hJSGrxdq]
+```
+
+**5. The background worker applied them** (`docker compose logs worker`):
+```text
+2026-10-17 15:07:47,668 INFO worker processed evt_1URZD4IKhLvwumC6hJSGrxdq checkout.session.completed: tenant 6034fd33-45c0-4b70-b895-78f277361bed -> pro (checkout completed)
+2026-10-17 15:07:47,673 INFO worker processed evt_1URZD5IKhLvwumC66Au1IS35 customer.subscription.created: ignored: customer.subscription.created is not handled
+2026-10-17 15:07:47,676 INFO worker processed evt_1URZD5IKhLvwumC6Gp7hqqTA customer.subscription.updated: tenant 6034fd33-45c0-4b70-b895-78f277361bed -> pro/active (subscription active)
+```
+
+**6. After:** `GET /usage` now shows Pro limits:
+```json
+{"plan": "pro", "status": "active", "limits": {"api_calls": 50000, "tokens": 5000000}}
+```
+```text
+name             | plan_code | status |    stripe_subscription_id    | sub_status 
+------------------------------+-----------+--------+------------------------------+------------
+ Initech (Free, for checkout) | pro       | active | sub_1URZD0IKhLvwumC6i5sNZ9W5 | active
+(1 row)
+```
+
+### ✅ Webhooks verify signatures, ignore duplicate events, and update tenant plan/status (Probe 4)
 
 Unit-proven with real HMAC-SHA256 Stripe signatures:
 - Forged signature → `400 invalid_signature`, nothing stored, plan unchanged (`test_forged_signature_is_400_and_changes_nothing`)
@@ -269,7 +313,31 @@ Unit-proven with real HMAC-SHA256 Stripe signatures:
 - `past_due` → tenant `pro/past_due` → `402`; `deleted` → back to `free` (`test_subscription_lifecycle_updates_plan`)
 - An older event arriving late cannot undo a newer state (`test_out_of_order_event_cannot_undo_newer_state`)
 
-_Live transcript (forged curl → 400; `stripe events resend <evt>` → `duplicate_ignored`) goes here._
+**Live: forged signature → 400** (`scripts/probes.py`, signed with a wrong secret):
+
+**forged event** → `POST /webhooks/stripe` → **400** 
+```json
+{
+  "error": {
+    "code": "invalid_signature",
+    "message": "Webhook signature verification failed. Event rejected."
+  }
+}
+```
+
+**Live: real event replayed → processed once.** Stripe re-delivered the real checkout event with `stripe events resend evt_1URZD4IKhLvwumC6hJSGrxdq` (the last two listener lines above, at 22:08:16 → `[200]`). The same real event fetched from the Stripe API and re-posted with a valid signature answers:
+```json
+{"received":true,"event_id":"evt_1URZD4IKhLvwumC6hJSGrxdq","status":"duplicate_ignored"}
+```
+`stripe_events` after both replays: the checkout event is still one row, `attempts = 1`, and `processed_at` is unchanged from the first delivery (15:07:47 UTC):
+```text
+id              |             type              |  status   | attempts |                                     outcome                                     
+------------------------------+-------------------------------+-----------+----------+---------------------------------------------------------------------------------
+ evt_1URZD4IKhLvwumC6hJSGrxdq | checkout.session.completed    | processed |        1 | tenant 6034fd33-45c0-4b70-b895-78f277361bed -> pro (checkout completed)
+ evt_1URZD5IKhLvwumC66Au1IS35 | customer.subscription.created | processed |        1 | ignored: customer.subscription.created is not handled
+ evt_1URZD5IKhLvwumC6Gp7hqqTA | customer.subscription.updated | processed |        1 | tenant 6034fd33-45c0-4b70-b895-78f277361bed -> pro/active (subscription active)
+(3 rows)
+```
 
 ---
 
