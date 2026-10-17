@@ -3,10 +3,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import current_tenant
+from app.config import PRICING
 from app.db import transaction
 from app.errors import AppError
 from app.repo import usage as usage_repo
-from app.services import meter, quota
+from app.services import cost, meter, quota
 from app.services.periods import next_period_start, period_start
 
 router = APIRouter()
@@ -53,4 +54,7 @@ def get_usage(tenant: dict = Depends(current_tenant)):
         "limits": {"api_calls": tenant["api_call_limit"], "tokens": tenant["token_limit"]},
         "remaining": {"api_calls": max(0, tenant["api_call_limit"] - totals["api_calls"]),
                       "tokens": max(0, tenant["token_limit"] - used_tokens)},
+        "tokens_detail": {k: totals[k] for k in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens")},
+        "cost": cost.breakdown(totals, tenant["monthly_fee_micros"]),
+        "pricing": PRICING,
     }

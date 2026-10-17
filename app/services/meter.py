@@ -2,11 +2,12 @@
 import hashlib
 import json
 
+from app.config import PRICING
 from app.db import transaction
 from app.errors import AppError
 from app.repo import tenants as tenants_repo
 from app.repo import usage as usage_repo
-from app.services import quota
+from app.services import cost, quota
 from app.services.periods import period_start
 
 
@@ -44,6 +45,8 @@ def record(tenant_id, idempotency_key: str, usage: dict) -> tuple[int, dict, boo
             "tenant_id": str(tenant_id),
             "period_start": period.isoformat(),
             "recorded": {"api_calls": 1, **usage, "billable_tokens": requested_tokens},
+            # Informational per-request price; the monthly bill is computed from period totals (see GET /usage).
+            "request_cost_micros": PRICING["api_call_micros"] + cost.token_cost_micros(**usage),
             "usage_after": {"api_calls": used["api_calls"] + 1, "tokens": used["tokens"] + requested_tokens},
             "limits": {"api_calls": tenant["api_call_limit"], "tokens": tenant["token_limit"]},
         }
