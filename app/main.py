@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
-from app.api import metering
+from app.api import billing, metering
 from app.db import close_pool, init_pool
 from app.errors import AppError, app_error_handler, validation_error_handler
 
@@ -19,6 +19,7 @@ app = FastAPI(title="Usage Metering & Billing Engine", version="1.0.0", lifespan
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.include_router(metering.router)
+app.include_router(billing.router)
 
 
 @app.get("/health", summary="Liveness check")
