@@ -17,7 +17,7 @@ def test_same_request_twice_creates_one_event(client, make_tenant):
     first = gen(client, t["key"], "req-1")
     second = gen(client, t["key"], "req-1")
     assert first.status_code == second.status_code == 201
-    assert first.json() == second.json()
+    assert first.content == second.content  # byte-identical replay, not just equal JSON
     assert first.headers["Idempotent-Replayed"] == "false"
     assert second.headers["Idempotent-Replayed"] == "true"
     assert count_events(t["id"]) == 1

@@ -15,8 +15,8 @@ def request_hash(usage: dict) -> str:
     return hashlib.sha256(json.dumps(usage, sort_keys=True).encode()).hexdigest()
 
 
-def record(tenant_id, idempotency_key: str, usage: dict) -> tuple[int, dict, bool]:
-    """Returns (status, body, replayed). The whole check-and-insert is one transaction."""
+def record(tenant_id, idempotency_key: str, usage: dict) -> tuple[int, str, bool]:
+    """Returns (status, serialized JSON body, replayed). The whole check-and-insert is one transaction."""
     req_hash = request_hash(usage)
     period = period_start()
     with transaction() as conn:
@@ -50,5 +50,6 @@ def record(tenant_id, idempotency_key: str, usage: dict) -> tuple[int, dict, boo
             "usage_after": {"api_calls": used["api_calls"] + 1, "tokens": used["tokens"] + requested_tokens},
             "limits": {"api_calls": tenant["api_call_limit"], "tokens": tenant["token_limit"]},
         }
-        usage_repo.store_idempotent_response(conn, tenant_id, idempotency_key, req_hash, 201, body)
-        return 201, body, False
+        serialized = json.dumps(body)
+        usage_repo.store_idempotent_response(conn, tenant_id, idempotency_key, req_hash, 201, serialized)
+        return 201, serialized, False

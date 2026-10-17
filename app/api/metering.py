@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import current_tenant
@@ -36,7 +36,8 @@ def generate(body: GenerateRequest, tenant: dict = Depends(current_tenant),
         raise AppError(400, "missing_idempotency_key",
                        "Send a unique Idempotency-Key header (1-255 chars). Reuse it only when retrying the same request.")
     status, payload, replayed = meter.record(tenant["id"], idempotency_key, body.model_dump())
-    return JSONResponse(payload, status_code=status, headers={"Idempotent-Replayed": "true" if replayed else "false"})
+    return Response(payload, status_code=status, media_type="application/json",
+                    headers={"Idempotent-Replayed": "true" if replayed else "false"})
 
 
 @router.get("/usage", summary="This month's usage, limits and cost for the calling tenant")
